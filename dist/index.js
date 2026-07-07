@@ -34871,7 +34871,7 @@ function core_debug(message) {
  * @param properties optional properties to add to the annotation.
  */
 function error(message, properties = {}) {
-    issueCommand('error', toCommandProperties(properties), message instanceof Error ? message.toString() : message);
+    command_issueCommand('error', utils_toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 /**
  * Adds a warning issue
@@ -34894,7 +34894,7 @@ function notice(message, properties = {}) {
  * @param message info message
  */
 function info(message) {
-    process.stdout.write(message + os.EOL);
+    process.stdout.write(message + external_os_namespaceObject.EOL);
 }
 /**
  * Begin an output group.
@@ -38136,12 +38136,23 @@ function filter_alerts(should_be_dismissed, predicate, sarif) {
         rules = get_rules_from_run(run);
         for (const result of run.results || []) {
             const properties = result.properties;
-            if (should_be_dismissed.has(alert_identifier(rules, result))) {
+            const id = alert_identifier(rules, result);
+            const matches = should_be_dismissed.has(id);
+            // DEBUG-INSTRUMENTATION
+            info(`[filter_alerts] id=${id} matches=${matches} hasProps=${properties != null} alertUrl=${properties != null ? properties["github/alertUrl"] : "N/A"}`);
+            if (matches) {
                 if (properties != null) {
                     const alertUrl = properties["github/alertUrl"];
-                    if (predicate(alertUrl)) {
+                    const predicateResult = predicate(alertUrl);
+                    // DEBUG-INSTRUMENTATION
+                    info(`[filter_alerts]   -> predicate(${alertUrl})=${predicateResult}`);
+                    if (predicateResult) {
                         alerts.push(alertUrl);
                     }
+                }
+                else {
+                    // DEBUG-INSTRUMENTATION
+                    info(`[filter_alerts]   -> SKIPPED: properties is null/undefined for matching result id=${id}`);
                 }
             }
         }
@@ -38234,30 +38245,41 @@ async function run() {
     }));
     const nwo = github_context.repo;
     const analyses_url = await wait_for_upload(client, nwo, sarif_id);
+    info(`[DEBUG] analyses_url=${analyses_url}`); // DEBUG-INSTRUMENTATION
     const response1 = await client.request({ url: analyses_url });
     const analyses = response1.data;
+    info(`[DEBUG] analyses.length=${analyses.length}`); // DEBUG-INSTRUMENTATION
+    info(`[DEBUG] analyses=${JSON.stringify(analyses.map((a) => ({ url: a.url, created_at: a.created_at, results_count: a.results_count })))}`); // DEBUG-INSTRUMENTATION
     const analysis_url = analyses[0]["url"];
     const response2 = await client.request({
         url: analysis_url,
         headers: { Accept: "application/sarif+json" },
     });
     const sarif2 = response2.data;
+    info(`[DEBUG] sarif2 runs=${sarif2.runs.length} results=${sarif2.runs.reduce((n, r) => n + (r.results?.length || 0), 0)}`); // DEBUG-INSTRUMENTATION
     // Get SARIF file paths (supports both file and directory)
     const sarifFiles = getSarifFilePaths(sarifPath);
     core_debug(`Found ${sarifFiles.length} SARIF file(s) to process`);
+    info(`[DEBUG] sarifFiles=${JSON.stringify(sarifFiles)}`); // DEBUG-INSTRUMENTATION
     // Merge all SARIF files into a single object
     const sarif1 = mergeSarifFiles(sarifFiles);
+    info(`[DEBUG] sarif1 runs=${sarif1.runs.length} results=${sarif1.runs.reduce((n, r) => n + (r.results?.length || 0), 0)}`); // DEBUG-INSTRUMENTATION
     const [normal, suppressed] = split_alerts(sarif1);
+    info(`[DEBUG] normal.size=${normal.size} suppressed.size=${suppressed.size}`); // DEBUG-INSTRUMENTATION
+    info(`[DEBUG] suppressed=${JSON.stringify([...suppressed])}`); // DEBUG-INSTRUMENTATION
     const all_dismissed_alerts = await client.paginate(client.rest.codeScanning.listAlertsForRepo, {
         ...nwo,
         state: "dismissed",
         per_page: 100,
     });
+    info(`[DEBUG] all_dismissed_alerts.length=${all_dismissed_alerts.length}`); // DEBUG-INSTRUMENTATION
+    info(`[DEBUG] all_dismissed_alerts urls=${JSON.stringify(all_dismissed_alerts.map((x) => x.url))}`); // DEBUG-INSTRUMENTATION
     const dismissed_alerts = new Map(all_dismissed_alerts.map((x) => [
         x.url,
         x.dismissed_comment || undefined,
     ]));
     const to_dismiss = filter_alerts(suppressed, (alertUrl) => !dismissed_alerts.has(alertUrl), sarif2);
+    info(`[DEBUG] to_dismiss=${JSON.stringify(to_dismiss)}`); // DEBUG-INSTRUMENTATION
     for (const alert of to_dismiss) {
         console.debug(`Dismissing alert: ${alert}`);
         const payload = {
@@ -38268,6 +38290,7 @@ async function run() {
         await patch_alert(client, alert, payload);
     }
     const to_reopen = filter_alerts(normal, (alertUrl) => dismissed_alerts.get(alertUrl) === SUPPRESSED_VIA_SARIF, sarif2);
+    info(`[DEBUG] to_reopen=${JSON.stringify(to_reopen)}`); // DEBUG-INSTRUMENTATION
     for (const alert of to_reopen) {
         console.debug(`Re-opening alert: ${alert}`);
         const payload = {
@@ -38275,7 +38298,12 @@ async function run() {
         };
         await patch_alert(client, alert, payload);
     }
+    info(`[DEBUG] run() completed successfully`); // DEBUG-INSTRUMENTATION
 }
+void run().catch((error) => {
+    // DEBUG-INSTRUMENTATION: surface any uncaught error explicitly
+    setFailed(`[DEBUG] run() threw: ${error?.stack || error}`);
+});
 void run();
 
 var __webpack_exports__run = __webpack_exports__.e;

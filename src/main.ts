@@ -241,12 +241,28 @@ function filter_alerts(
 
     for (const result of run.results || []) {
       const properties = result.properties;
-      if (should_be_dismissed.has(alert_identifier(rules, result))) {
+      const id = alert_identifier(rules, result);
+      const matches = should_be_dismissed.has(id);
+      // DEBUG-INSTRUMENTATION
+      core.info(
+        `[filter_alerts] id=${id} matches=${matches} hasProps=${properties != null} alertUrl=${properties != null ? properties["github/alertUrl"] : "N/A"}`,
+      );
+      if (matches) {
         if (properties != null) {
           const alertUrl = properties["github/alertUrl"];
-          if (predicate(alertUrl)) {
+          const predicateResult = predicate(alertUrl);
+          // DEBUG-INSTRUMENTATION
+          core.info(
+            `[filter_alerts]   -> predicate(${alertUrl})=${predicateResult}`,
+          );
+          if (predicateResult) {
             alerts.push(alertUrl);
           }
+        } else {
+          // DEBUG-INSTRUMENTATION
+          core.info(
+            `[filter_alerts]   -> SKIPPED: properties is null/undefined for matching result id=${id}`,
+          );
         }
       }
     }
@@ -355,23 +371,31 @@ export async function run(): Promise<void> {
   );
   const nwo = github.context.repo;
   const analyses_url = await wait_for_upload(client, nwo, sarif_id);
+  core.info(`[DEBUG] analyses_url=${analyses_url}`); // DEBUG-INSTRUMENTATION
   const response1 = await client.request({ url: analyses_url });
   const analyses = response1.data;
+  core.info(`[DEBUG] analyses.length=${analyses.length}`); // DEBUG-INSTRUMENTATION
+  core.info(`[DEBUG] analyses=${JSON.stringify(analyses.map((a: { url: string; created_at: string; results_count: number }) => ({ url: a.url, created_at: a.created_at, results_count: a.results_count })))}`); // DEBUG-INSTRUMENTATION
   const analysis_url = analyses[0]["url"];
   const response2 = await client.request({
     url: analysis_url,
     headers: { Accept: "application/sarif+json" },
   });
   const sarif2 = response2.data;
+  core.info(`[DEBUG] sarif2 runs=${sarif2.runs.length} results=${sarif2.runs.reduce((n: number, r: SarifRun) => n + (r.results?.length || 0), 0)}`); // DEBUG-INSTRUMENTATION
 
   // Get SARIF file paths (supports both file and directory)
   const sarifFiles = getSarifFilePaths(sarifPath);
   core.debug(`Found ${sarifFiles.length} SARIF file(s) to process`);
+  core.info(`[DEBUG] sarifFiles=${JSON.stringify(sarifFiles)}`); // DEBUG-INSTRUMENTATION
 
   // Merge all SARIF files into a single object
   const sarif1 = mergeSarifFiles(sarifFiles);
+  core.info(`[DEBUG] sarif1 runs=${sarif1.runs.length} results=${sarif1.runs.reduce((n: number, r: SarifRun) => n + (r.results?.length || 0), 0)}`); // DEBUG-INSTRUMENTATION
 
   const [normal, suppressed] = split_alerts(sarif1);
+  core.info(`[DEBUG] normal.size=${normal.size} suppressed.size=${suppressed.size}`); // DEBUG-INSTRUMENTATION
+  core.info(`[DEBUG] suppressed=${JSON.stringify([...suppressed])}`); // DEBUG-INSTRUMENTATION
 
   const all_dismissed_alerts = await client.paginate(
     client.rest.codeScanning.listAlertsForRepo,
@@ -381,6 +405,8 @@ export async function run(): Promise<void> {
       per_page: 100,
     },
   );
+  core.info(`[DEBUG] all_dismissed_alerts.length=${all_dismissed_alerts.length}`); // DEBUG-INSTRUMENTATION
+  core.info(`[DEBUG] all_dismissed_alerts urls=${JSON.stringify(all_dismissed_alerts.map((x: { url: string }) => x.url))}`); // DEBUG-INSTRUMENTATION
   const dismissed_alerts = new Map(
     all_dismissed_alerts.map(
       (x: { url: string; dismissed_comment?: string | null }) => [
@@ -395,6 +421,7 @@ export async function run(): Promise<void> {
     (alertUrl) => !dismissed_alerts.has(alertUrl),
     sarif2,
   );
+  core.info(`[DEBUG] to_dismiss=${JSON.stringify(to_dismiss)}`); // DEBUG-INSTRUMENTATION
 
   for (const alert of to_dismiss) {
     console.debug(`Dismissing alert: ${alert}`);
@@ -411,6 +438,7 @@ export async function run(): Promise<void> {
     (alertUrl) => dismissed_alerts.get(alertUrl) === SUPPRESSED_VIA_SARIF,
     sarif2,
   );
+  core.info(`[DEBUG] to_reopen=${JSON.stringify(to_reopen)}`); // DEBUG-INSTRUMENTATION
 
   for (const alert of to_reopen) {
     console.debug(`Re-opening alert: ${alert}`);
@@ -419,6 +447,12 @@ export async function run(): Promise<void> {
     };
     await patch_alert(client, alert, payload);
   }
+  core.info(`[DEBUG] run() completed successfully`); // DEBUG-INSTRUMENTATION
 }
+
+void run().catch((error) => {
+  // DEBUG-INSTRUMENTATION: surface any uncaught error explicitly
+  core.setFailed(`[DEBUG] run() threw: ${error?.stack || error}`);
+});
 
 void run();
