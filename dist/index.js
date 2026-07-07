@@ -38132,7 +38132,7 @@ function get_rules_from_run(run) {
 function filter_alerts(should_be_dismissed, predicate, sarif) {
     const alerts = [];
     let rules;
-    for (const run of sarif.runs) {
+    for (const run of sarif.runs || []) {
         rules = get_rules_from_run(run);
         for (const result of run.results || []) {
             const properties = result.properties;
@@ -38233,6 +38233,9 @@ async function wait_for_upload(client, nwo, sarif_id) {
  * for each remaining`github/alertUrl` make a PATCH request to set the dismissal state and reason
  */
 async function run() {
+    // DEBUG-INSTRUMENTATION: unique marker to detect whether run() is invoked more than once
+    const RUN_INVOCATION_ID = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    info(`[DEBUG] run() INVOKED, id=${RUN_INVOCATION_ID}`);
     const sarif_id = getInput("sarif-id", { required: true });
     const sarifPath = getInput("sarif-file", { required: true });
     const api_token = getInput("token") || getRequiredEnvParam("GITHUB_TOKEN");
@@ -38256,7 +38259,8 @@ async function run() {
         headers: { Accept: "application/sarif+json" },
     });
     const sarif2 = response2.data;
-    info(`[DEBUG] sarif2 runs=${sarif2.runs.length} results=${sarif2.runs.reduce((n, r) => n + (r.results?.length || 0), 0)}`); // DEBUG-INSTRUMENTATION
+    info(`[DEBUG] typeof sarif2=${typeof sarif2} sarif2 keys=${sarif2 ? JSON.stringify(Object.keys(sarif2)) : "N/A"}`); // DEBUG-INSTRUMENTATION
+    info(`[DEBUG] sarif2 runs=${sarif2?.runs?.length} results=${sarif2?.runs?.reduce((n, r) => n + (r.results?.length || 0), 0)}`); // DEBUG-INSTRUMENTATION
     // Get SARIF file paths (supports both file and directory)
     const sarifFiles = getSarifFilePaths(sarifPath);
     core_debug(`Found ${sarifFiles.length} SARIF file(s) to process`);

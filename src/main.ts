@@ -236,7 +236,7 @@ function filter_alerts(
 ) {
   const alerts = [];
   let rules;
-  for (const run of sarif.runs) {
+  for (const run of sarif.runs || []) {
     rules = get_rules_from_run(run);
 
     for (const result of run.results || []) {
@@ -354,6 +354,9 @@ async function wait_for_upload(
  */
 
 export async function run(): Promise<void> {
+  // DEBUG-INSTRUMENTATION: unique marker to detect whether run() is invoked more than once
+  const RUN_INVOCATION_ID = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  core.info(`[DEBUG] run() INVOKED, id=${RUN_INVOCATION_ID}`);
   const sarif_id = core.getInput("sarif-id", { required: true });
   const sarifPath = core.getInput("sarif-file", { required: true });
   const api_token =
@@ -382,7 +385,8 @@ export async function run(): Promise<void> {
     headers: { Accept: "application/sarif+json" },
   });
   const sarif2 = response2.data;
-  core.info(`[DEBUG] sarif2 runs=${sarif2.runs.length} results=${sarif2.runs.reduce((n: number, r: SarifRun) => n + (r.results?.length || 0), 0)}`); // DEBUG-INSTRUMENTATION
+  core.info(`[DEBUG] typeof sarif2=${typeof sarif2} sarif2 keys=${sarif2 ? JSON.stringify(Object.keys(sarif2)) : "N/A"}`); // DEBUG-INSTRUMENTATION
+  core.info(`[DEBUG] sarif2 runs=${sarif2?.runs?.length} results=${sarif2?.runs?.reduce((n: number, r: SarifRun) => n + (r.results?.length || 0), 0)}`); // DEBUG-INSTRUMENTATION
 
   // Get SARIF file paths (supports both file and directory)
   const sarifFiles = getSarifFilePaths(sarifPath);
