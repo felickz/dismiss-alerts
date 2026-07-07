@@ -380,13 +380,35 @@ export async function run(): Promise<void> {
   core.info(`[DEBUG] analyses.length=${analyses.length}`); // DEBUG-INSTRUMENTATION
   core.info(`[DEBUG] analyses=${JSON.stringify(analyses.map((a: { url: string; created_at: string; results_count: number }) => ({ url: a.url, created_at: a.created_at, results_count: a.results_count })))}`); // DEBUG-INSTRUMENTATION
   const analysis_url = analyses[0]["url"];
-  const response2 = await client.request({
-    url: analysis_url,
-    headers: { Accept: "application/sarif+json" },
-  });
-  const sarif2 = response2.data;
-  core.info(`[DEBUG] typeof sarif2=${typeof sarif2} sarif2 keys=${sarif2 ? JSON.stringify(Object.keys(sarif2)) : "N/A"}`); // DEBUG-INSTRUMENTATION
-  core.info(`[DEBUG] sarif2 runs=${sarif2?.runs?.length} results=${sarif2?.runs?.reduce((n: number, r: SarifRun) => n + (r.results?.length || 0), 0)}`); // DEBUG-INSTRUMENTATION
+  // DEBUG-INSTRUMENTATION: PROPOSED FIX - retry fetching the analysis-as-SARIF export until it
+  // is actually populated. GitHub's `processing_status: complete` signal (checked by
+  // wait_for_upload above) only guarantees the raw upload has been processed into alerts;
+  // it does NOT guarantee the separate SARIF-export representation of that analysis is ready.
+  // Fetching immediately can return an empty {} object for several seconds.
+  let sarif2: SarifFile | undefined;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    if (attempt > 0) {
+      core.info(
+        `[DEBUG] sarif2 export not ready yet (attempt ${attempt}), retrying after backoff...`,
+      );
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+    const response2 = await client.request({
+      url: analysis_url,
+      headers: { Accept: "application/sarif+json" },
+    });
+    const candidate = response2.data as SarifFile;
+    if (candidate?.runs != null && candidate.runs.length > 0) {
+      sarif2 = candidate;
+      break;
+    }
+  }
+  if (sarif2 == null) {
+    throw new Error(
+      `Timed out waiting for SARIF export of analysis to be populated: ${analysis_url}`,
+    );
+  }
+  core.info(`[DEBUG] sarif2 runs=${sarif2.runs.length} results=${sarif2.runs.reduce((n: number, r: SarifRun) => n + (r.results?.length || 0), 0)}`); // DEBUG-INSTRUMENTATION
 
   // Get SARIF file paths (supports both file and directory)
   const sarifFiles = getSarifFilePaths(sarifPath);
