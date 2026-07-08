@@ -324,6 +324,67 @@ async function wait_for_upload(
   throw Error(`Processing of upload is taking too long: ${sarif_id}`);
 }
 
+// Should lead to status checks after 5s, 15s, 35s, 75s, 155s, and 315s.
+const ANALYSIS_STATUS_CHECK_INITIAL_BACKOFF_MILLISECONDS = 5 * 1000;
+const ANALYSIS_STATUS_CHECK_BACKOFF_MULTIPLIER = 2;
+const ANALYSIS_STATUS_CHECK_MAX_TRIES = 6;
+
+/**
+ * Fetch the analysis-as-SARIF export for a completed analysis
+ * (`GET .../code-scanning/analyses/{id}` with `Accept: application/sarif+json`).
+ *
+ * This export is computed asynchronously and is a *separate* signal from the
+ * upload's own `processing_status` (which `wait_for_upload` already waits on):
+ * it can lag 100+ seconds behind the upload reporting "complete", during
+ * which it returns an empty `{}` object with no `runs` key at all. Since
+ * `filter_alerts`/`split_alerts` iterate `sarif.runs`, an empty export
+ * silently produces zero matches - the action reports success having
+ * dismissed or reopened nothing, with no indication anything went wrong.
+ *
+ * This retries with backoff (mirroring the shape of codeql-action's own
+ * `waitForProcessing`, see
+ * https://github.com/github/codeql-action/blob/main/src/upload-lib.ts) until
+ * the export actually contains `runs`, and throws - rather than silently
+ * continuing - if the retry budget is exhausted, since silently proceeding
+ * here means the action does nothing while still reporting success.
+ */
+async function wait_for_analysis_processing(
+  client: GitHubClient,
+  analysis_url: string,
+): Promise<SarifFile> {
+  let backoff = ANALYSIS_STATUS_CHECK_INITIAL_BACKOFF_MILLISECONDS;
+
+  for (
+    let attempt = 1;
+    attempt <= ANALYSIS_STATUS_CHECK_MAX_TRIES;
+    attempt++
+  ) {
+    await new Promise((r) => setTimeout(r, backoff));
+
+    const response = await client.request({
+      url: analysis_url,
+      headers: { Accept: "application/sarif+json" },
+    });
+    const sarif = response.data as SarifFile;
+
+    if (Array.isArray(sarif?.runs) && sarif.runs.length > 0) {
+      core.info(
+        `Analysis SARIF export is ready (attempt ${attempt}/${ANALYSIS_STATUS_CHECK_MAX_TRIES}).`,
+      );
+      return sarif;
+    }
+
+    core.info(
+      `Analysis SARIF export is not ready yet (attempt ${attempt}/${ANALYSIS_STATUS_CHECK_MAX_TRIES}); waiting before retry...`,
+    );
+    backoff *= ANALYSIS_STATUS_CHECK_BACKOFF_MULTIPLIER;
+  }
+
+  throw new Error(
+    `Timed out waiting for the analysis SARIF export to be populated: ${analysis_url}`,
+  );
+}
+
 /* Run codeql analyze with suppression queries in addition to normal ones
  * Upload the SARIF file and get the sarif - upload - id
  * Use sarif - upload - id to check and wait until upload is processed
@@ -353,16 +414,25 @@ export async function run(): Promise<void> {
       log: consoleLogLevel({ level: "debug" }),
     }),
   );
+  const wait_for_analysis = core.getBooleanInput(
+    "wait-for-analysis-processing",
+  );
   const nwo = github.context.repo;
   const analyses_url = await wait_for_upload(client, nwo, sarif_id);
   const response1 = await client.request({ url: analyses_url });
   const analyses = response1.data;
   const analysis_url = analyses[0]["url"];
-  const response2 = await client.request({
-    url: analysis_url,
-    headers: { Accept: "application/sarif+json" },
-  });
-  const sarif2 = response2.data;
+
+  let sarif2: SarifFile;
+  if (wait_for_analysis) {
+    sarif2 = await wait_for_analysis_processing(client, analysis_url);
+  } else {
+    const response2 = await client.request({
+      url: analysis_url,
+      headers: { Accept: "application/sarif+json" },
+    });
+    sarif2 = response2.data;
+  }
 
   // Get SARIF file paths (supports both file and directory)
   const sarifFiles = getSarifFilePaths(sarifPath);

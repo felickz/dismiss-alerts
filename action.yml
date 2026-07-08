@@ -7,6 +7,18 @@ inputs:
   sarif-file:
     description: "Path to the input SARIF file or directory containing SARIF files"
     required: true
+  wait-for-analysis-processing:
+    description: >-
+      If true, wait for the analysis-as-SARIF export (fetched from the analysis URL returned
+      by the API, distinct from the upload's own processing status) to be populated before
+      using it to match and dismiss/reopen alerts, retrying with backoff. This works around a
+      race condition where that export can lag 100+ seconds behind the SARIF upload itself
+      reporting "complete", which otherwise causes alerts to silently never be dismissed or
+      reopened even though the step reports success. Mirrors the shape of codeql-action's own
+      `wait-for-processing` input, but for this separate endpoint. Set to false to fetch the
+      export once, immediately, with no retry.
+    required: false
+    default: "true"
 runs:
   using: "node20"
   main: "dist/index.js"
