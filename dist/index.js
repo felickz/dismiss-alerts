@@ -38209,12 +38209,14 @@ async function wait_for_upload(client, nwo, sarif_id) {
     }
     throw Error(`Processing of upload is taking too long: ${sarif_id}`);
 }
-// Should lead to status checks after 5s, 15s, 35s, 75s, 155s, 315s, and 635s
-// (~10.5 minutes total). Live testing showed the export can lag 100s-330s+
-// (highly variable), so this budget is intentionally generous.
+// Should lead to status checks after 5s, 15s, 35s, 75s, 155s, 315s, 635s,
+// and 1275s (~21 minutes total). Live testing on forks-felickz/crate-python
+// showed the export can lag anywhere from ~100s up to 650s-740s+ (highly
+// variable), so earlier smaller budgets (6 and 7 tries) were both observed
+// to time out before the export became ready.
 const ANALYSIS_STATUS_CHECK_INITIAL_BACKOFF_MILLISECONDS = 5 * 1000;
 const ANALYSIS_STATUS_CHECK_BACKOFF_MULTIPLIER = 2;
-const ANALYSIS_STATUS_CHECK_MAX_TRIES = 7;
+const ANALYSIS_STATUS_CHECK_MAX_TRIES = 8;
 /**
  * Fetch the analysis-as-SARIF export for a completed analysis
  * (`GET .../code-scanning/analyses/{id}` with `Accept: application/sarif+json`).
