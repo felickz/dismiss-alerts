@@ -324,10 +324,12 @@ async function wait_for_upload(
   throw Error(`Processing of upload is taking too long: ${sarif_id}`);
 }
 
-// Should lead to status checks after 5s, 15s, 35s, 75s, 155s, and 315s.
+// Should lead to status checks after 5s, 15s, 35s, 75s, 155s, 315s, and 635s
+// (~10.5 minutes total). Live testing showed the export can lag 100s-330s+
+// (highly variable), so this budget is intentionally generous.
 const ANALYSIS_STATUS_CHECK_INITIAL_BACKOFF_MILLISECONDS = 5 * 1000;
 const ANALYSIS_STATUS_CHECK_BACKOFF_MULTIPLIER = 2;
-const ANALYSIS_STATUS_CHECK_MAX_TRIES = 6;
+const ANALYSIS_STATUS_CHECK_MAX_TRIES = 7;
 
 /**
  * Fetch the analysis-as-SARIF export for a completed analysis
